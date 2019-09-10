@@ -1,0 +1,158 @@
+# Installation
+1. Unzip EAP 7.2 and rename it (rhpam-eap)
+2. Unzip business-central, and merge to rhpam-eap
+3. Unzip kie-server.war and create dodeploy
+4. Unzip rh-sso
+5. Unzip rh-sso-adapter-eap7 and merge to rhpam-eap
+6. Start rhpam-eap as admin with `standalone-full.xml` (To allow adapter installation for that xml config)
+```
+cd rhpam-eap/bin
+./standalone.sh --admin-only -c standalone-full.xml
+```
+7. Install the rhsso adapter using the `jboss-cli.sh` that connect to the admin console
+```
+./jboss-cli.sh --connect --file=adapter-install.cli
+```
+8. Stop the EAP server.
+
+# RHSSO preparation
+1. Start rh-sso (keycloak) with:
+```
+./standalone.sh -Djboss.socket.binding.port-offset=150
+```
+2. Navigate to RHSSO (http://localhost:8230/auth) and configure initial username/password; In current installation I used `ssoadmin/r3dh4t1!`
+3. Create a realm for kie authentication and authorization (`kie-realm`)
+4. Create PAM roles (`Administrators,admin,user,kie-server,rest-all`)
+5. Create Users with given roles.
+6. Create a client (`kie`), with:
+* Confidential access type
+* Standard flow enabled
+* Direct Access Grants Enabled
+* http://localhost:8080/business-central as the **Root URL**
+7. Create a client (`kie-git`);
+* Standard flow disabled
+* Confidential access type
+* Direct Access Grants enabled
+8. Create a client (`kie-execution-server`)
+* Confidential access type
+* Standard flow enabled
+* Direct Access Grants Enabled
+* http://localhost:8080/kie-server as the **Root URL**
+
+# Integration
+1. Navigate to the `EAP_HOME/standalone/configuration` directory in your Red Hat JBoss EAP installation and edit the `standalone-full.xml` files to add the RH-SSO subsystem configuration. For example:
+```
+<subsystem xmlns="urn:jboss:domain:keycloak:1.1">
+ <secure-deployment name="business-central.war">
+   <realm>kie-realm</realm>
+   <auth-server-url>http://localhost:8180/auth</auth-server-url>
+   <ssl-required>external</ssl-required>
+   <enable-basic-auth>true</enable-basic-auth>
+   <resource>kie</resource>
+   <credential name="secret">759514d0-dbb1-46ba-b7e7-ff76e63c6891</credential>
+   <principal-attribute>preferred_username</principal-attribute>
+ </secure-deployment>
+</subsystem>
+```
+2. Business Central provides different remote service endpoints that can be consumed by third-party clients using a remote API. Open the Business Central application deployment descriptor file (`WEB-INF/web.xml`); add the following lines to add the `security-constraint` parameter for the url-patterns:
+```
+<security-constraint>
+  <web-resource-collection>
+    <web-resource-name>remote-services</web-resource-name>
+    <url-pattern>/rest/*</url-pattern>
+    <url-pattern>/maven2/*</url-pattern>
+    <url-pattern>/ws/*</url-pattern>
+  </web-resource-collection>
+  <auth-constraint>
+    <role-name>rest-all</role-name>
+    <role-name>rest-project</role-name>
+    <role-name>rest-deployment</role-name>
+    <role-name>rest-process</role-name>
+    <role-name>rest-process-read-only</role-name>
+    <role-name>rest-task</role-name>
+    <role-name>rest-task-read-only</role-name>
+    <role-name>rest-query</role-name>
+    <role-name>rest-client</role-name>
+  </auth-constraint>
+</security-constraint>
+```
+3. Download the json install for kie-git client into EAP_HOME
+4. specify the RH-SSO login module in the `standalone-full.xml`. By default, the security domain in RHPAM is set to `other`. Replace the default values of the `login-module` for the `kie-git`:
+```
+<security-domain name="other" cache-type="default">
+  <authentication>
+    <login-module code="org.keycloak.adapters.jaas.DirectAccessGrantsLoginModule" flag="required">
+      <module-option name="keycloak-config-file" value="$EAP_HOME/kie-git.json"/>
+    </login-module>
+  </authentication>
+</security-domain>
+```
+
+5. Add the `kie-server.war` security domain to `standalone-full.xml`. Please mind the `enable-basic-auth` tag.
+
+```
+<secure-deployment name="kie-server.war">
+  <realm>kie-realm</realm>
+  <auth-server-url>http://localhost:8230/auth</auth-server-url>
+  <ssl-required>EXTERNAL</ssl-required>
+  <resource>kie-execution-server</resource>
+  <credential name="secret">ed022fbb-7c0d-477d-9870-dcc1b37f2de4</credential>
+  <principal-attribute>preferred_username</principal-attribute>
+  <enable-basic-auth>true</enable-basic-auth>
+</secure-deployment>
+
+```
+
+NOW START THE PAM SERVER!!!
+
+# PROBLEM
+When creating process instances, they are created with initiator as `unknown`.
+Also when claiming tasks:
+
+```
+curl http://Tina:Password1%21@localhost:8080/kie-server/services/rest/server/containers/hr-hiring/tasks/1/states/claimed -X PUT -v
+*   Trying ::1:8080...
+* TCP_NODELAY set
+* connect to ::1 port 8080 failed: Connection refused
+*   Trying 127.0.0.1:8080...
+* TCP_NODELAY set
+* Connected to localhost (127.0.0.1) port 8080 (#0)
+* Server auth using Basic with user 'Tina'
+> PUT /kie-server/services/rest/server/containers/hr-hiring/tasks/1/states/claimed HTTP/1.1
+> Host: localhost:8080
+> Authorization: Basic VGluYTpQYXNzd29yZDEh
+> User-Agent: curl/7.65.3
+> Accept: */*
+> 
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 403 Forbidden
+< Expires: 0
+< Connection: keep-alive
+< Cache-Control: no-cache, no-store, must-revalidate
+< Pragma: no-cache
+< Content-Type: text/plain;charset=UTF-8
+< Content-Length: 98
+< Date: Wed, 14 Aug 2019 23:27:31 GMT
+< 
+"User '[UserImpl:'unknown']' does not have permissions to execute operation 'Claim' on task id 1
+* Connection #0 to host localhost left intact
+```
+
+Check the result: `"User '[UserImpl:'unknown']' does not have permissions to execute operation 'Claim' on task id 1`
+
+## Solving: use the Adapter, not the Elytron Adapter?
+
+When running:
+```
+cd rhpam-740-sso/bin
+./standalone.sh --admin-only -c standalone-full.xml
+./jboss-cli.sh --connect --file=adapter-elytron-install.cli
+```
+
+use instead:
+
+```
+cd rhpam-740-sso/bin
+./standalone.sh --admin-only -c standalone-full.xml
+./jboss-cli.sh --connect --file=adapter-install.cli
+```
