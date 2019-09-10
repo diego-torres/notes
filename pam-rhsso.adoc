@@ -105,6 +105,11 @@ cd rhpam-eap/bin
 
 NOW START THE PAM SERVER!!!
 
+# Useful  links
+
+PAM standalone supported properties: https://access.redhat.com/documentation/en-us/red_hat_process_automation_manager/7.4/html-single/installing_and_configuring_red_hat_process_automation_manager_on_red_hat_jboss_eap_7.2/index#run-standalone-properties-con
+
+
 # PROBLEM
 When creating process instances, they are created with initiator as `unknown`.
 Also when claiming tasks:
